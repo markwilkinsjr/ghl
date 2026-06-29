@@ -23,7 +23,19 @@ async function getConversation(conversationId) {
 
 async function getMessages(conversationId) {
   const res = await client.get(`/conversations/${conversationId}/messages`);
-  return res.data.messages || [];
+  // GHL nests messages under data.messages.messages on this endpoint
+  return res.data.messages?.messages || res.data.messages || [];
+}
+
+// Find the most recent conversation for a contact (needed because GHL workflow
+// webhooks don't always include a conversationId)
+async function findConversationByContact(contactId) {
+  const locationId = process.env.GHL_LOCATION_ID;
+  const res = await client.get("/conversations/search", {
+    params: { locationId, contactId },
+  });
+  const conversations = res.data.conversations || [];
+  return conversations[0] || null;
 }
 
 async function sendSMS(contactId, message) {
@@ -69,4 +81,12 @@ async function sendInitialOutreach(contactId) {
   return await sendSMS(contactId, message);
 }
 
-module.exports = { getContact, getConversation, getMessages, sendSMS, sendEmail, sendInitialOutreach };
+module.exports = {
+  getContact,
+  getConversation,
+  getMessages,
+  findConversationByContact,
+  sendSMS,
+  sendEmail,
+  sendInitialOutreach,
+};

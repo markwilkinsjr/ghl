@@ -1,6 +1,12 @@
 require("dotenv").config();
 const express = require("express");
-const { getContact, getMessages, sendSMS, sendInitialOutreach } = require("./ghl");
+const {
+  getContact,
+  getMessages,
+  findConversationByContact,
+  sendSMS,
+  sendInitialOutreach,
+} = require("./ghl");
 const { generateReply } = require("./claude");
 
 const app = express();
@@ -21,29 +27,51 @@ app.get("/health", (req, res) => res.json({ status: "ok" }));
 // Inbound message webhook — fired by GHL when a contact replies
 app.post("/webhook/inbound", verifyWebhookSecret, async (req, res) => {
   try {
-    const payload = req.body;
+    const payload = req.body || {};
     console.log("Inbound webhook received:", JSON.stringify(payload, null, 2));
 
-    const { contactId, conversationId, body: incomingText, direction, type } = payload;
+    // GHL workflow webhooks vary in shape — pull fields from several possible names
+    const contactId =
+      payload.contactId || payload.contact_id || payload.contact?.id || payload.id;
 
-    // Only process inbound messages (from the contact)
-    if (direction !== "inbound") {
-      return res.json({ skipped: "not an inbound message" });
+    let conversationId = payload.conversationId || payload.conversation_id;
+
+    // The reply text may arrive under different keys (or not at all)
+    let incomingText =
+      payload.body || payload.message || payload.messageBody || payload.text || "";
+
+    if (!contactId) {
+      console.warn("No contactId found in payload");
+      return res.status(400).json({ error: "Missing contactId" });
     }
 
-    // Only handle SMS and Email for now
-    if (!["SMS", "Email"].includes(type)) {
-      return res.json({ skipped: `unsupported type: ${type}` });
+    // If we don't have a conversation, look it up by contact
+    if (!conversationId) {
+      const convo = await findConversationByContact(contactId);
+      conversationId = convo?.id;
     }
 
-    if (!contactId || !incomingText) {
-      return res.status(400).json({ error: "Missing contactId or body" });
+    // Fetch conversation history so Claude has context
+    let history = [];
+    if (conversationId) {
+      const messages = await getMessages(conversationId);
+      // GHL returns newest first — reverse so it's chronological
+      history = [...messages].reverse();
     }
 
-    // Fetch recent conversation history so Claude has context
-    const messages = await getMessages(conversationId);
-    // GHL returns newest first — reverse so it's chronological
-    const history = [...messages].reverse();
+    // If the webhook didn't include the message text, use the latest inbound
+    // message from the fetched history
+    if (!incomingText && history.length) {
+      const lastInbound = [...history]
+        .reverse()
+        .find((m) => m.direction === "inbound");
+      incomingText = lastInbound?.body || lastInbound?.text || "";
+    }
+
+    if (!incomingText) {
+      console.warn("No incoming message text found");
+      return res.json({ skipped: "no message text to respond to" });
+    }
 
     // Generate Claude's reply
     const reply = await generateReply(history, incomingText);
