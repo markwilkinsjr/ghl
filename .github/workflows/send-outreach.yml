@@ -1,0 +1,37 @@
+name: Send Outreach
+
+# Trigger the initial follow-up text to a contact who didn't purchase.
+# Run it manually from the Actions tab with a "Run workflow" button.
+
+on:
+  workflow_dispatch:
+    inputs:
+      contactId:
+        description: "GoHighLevel Contact ID to send the outreach to"
+        required: true
+        type: string
+
+jobs:
+  outreach:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send outreach request to Railway app
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          CONTACT_ID: ${{ inputs.contactId }}
+        run: |
+          echo "Sending outreach to contact: $CONTACT_ID"
+          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" \
+            -X POST "$APP_URL/outreach?secret=$WEBHOOK_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{\"contactId\": \"$CONTACT_ID\"}")
+          echo "HTTP status: $HTTP_STATUS"
+          echo "Response:"
+          cat response.txt
+          echo ""
+          if [ "$HTTP_STATUS" -ge 400 ]; then
+            echo "::error::Outreach failed with status $HTTP_STATUS"
+            exit 1
+          fi
+          echo "::notice::Outreach sent successfully"
