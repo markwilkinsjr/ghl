@@ -50,13 +50,19 @@ async function sendInitialOutreach(contactId) {
   const contact = await getContact(contactId);
   const firstName = contact.firstName || "there";
 
-  const freebie = process.env.FREEBIE_NAME || "a free resource";
-  const freebieLink = process.env.FREEBIE_LINK || "";
+  const freebie = process.env.FREEBIE_NAME;
+  const freebieLink = process.env.FREEBIE_LINK;
   const courseName = process.env.COURSE_NAME || "our course";
+
+  // Include the freebie line only if both name and link are configured
+  const freebieLine =
+    freebie && freebieLink
+      ? `No worries at all — I'd love to send you ${freebie} completely free: ${freebieLink}\n\n`
+      : `No worries at all — I'd still love to help you out.\n\n`;
 
   const message =
     `Hey ${firstName}! I noticed you checked out ${courseName} but didn't grab a spot. ` +
-    `No worries at all — I'd love to send you ${freebie} completely free: ${freebieLink}\n\n` +
+    freebieLine +
     `Quick question though — what held you back? Was it timing, price, or something else? ` +
     `I want to make sure I can help you out. 😊`;
 
