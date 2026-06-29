@@ -1,0 +1,16 @@
+{
+  "name": "ghl-claude-followup",
+  "version": "1.0.0",
+  "description": "AI-powered follow-up system: GoHighLevel + Claude",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "axios": "^1.9.0",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0"
+  }
+}
