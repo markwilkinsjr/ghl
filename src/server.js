@@ -25,7 +25,7 @@ function verifyWebhookSecret(req, res, next) {
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 // Inbound message webhook — fired by GHL when a contact replies
-app.post("/webhook/inbound", verifyWebhookSecret, async (req, res) => {
+app.post("/webhook/inbound", async (req, res) => {
   try {
     const payload = req.body || {};
     console.log("Inbound webhook received:", JSON.stringify(payload, null, 2));
