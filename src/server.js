@@ -297,6 +297,58 @@ app.post("/report", verifyWebhookSecret, async (req, res) => {
   }
 });
 
+// Conversations report — for every lead who replied, dump the message thread
+// so you can review Jordan's live handling.
+app.post("/report/conversations", verifyWebhookSecret, async (req, res) => {
+  try {
+    const outreached = await searchContactsByTag("ai-outreach-sent");
+    const threads = [];
+
+    for (const c of outreached) {
+      let msgs = [];
+      try {
+        const convo = await findConversationByContact(c.id);
+        if (convo?.id) msgs = await getMessages(convo.id);
+      } catch (e) {
+        continue;
+      }
+
+      // GHL returns newest first — reverse to chronological
+      const chronological = [...msgs].reverse();
+      const inbound = chronological.filter((m) => m.direction === "inbound");
+      if (inbound.length === 0) continue;
+
+      const tags = (c.tags || []).map((t) => String(t).toLowerCase());
+      threads.push({
+        id: c.id,
+        name: `${c.firstName || ""} ${c.lastName || ""}`.trim() || c.contactName || "(no name)",
+        phone: c.phone,
+        tags: tags.filter((t) =>
+          ["hot-lead", "opted-out", "conversation-ended", "ai-outreach-sent"].includes(t)
+        ),
+        message_count: chronological.length,
+        thread: chronological.map((m) => ({
+          from: m.direction === "inbound" ? "LEAD" : "JORDAN",
+          at: m.dateAdded,
+          body: (m.body || m.text || "").trim(),
+        })),
+      });
+    }
+
+    // Sort so most-active convos come first
+    threads.sort((a, b) => b.message_count - a.message_count);
+
+    res.json({
+      generated_at: new Date().toISOString(),
+      active_conversations: threads.length,
+      threads,
+    });
+  } catch (err) {
+    console.error("Conversations report error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
