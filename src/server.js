@@ -9,6 +9,7 @@ const {
   contactShouldBeSkipped,
   sendInitialOutreach,
   pickEligibleContacts,
+  searchContactsByTag,
 } = require("./ghl");
 const { generateReply, isOptOut } = require("./claude");
 
@@ -214,6 +215,84 @@ app.post("/outreach/auto-batch/run", verifyWebhookSecret, async (req, res) => {
     res.json({ requested: count, sent, skipped, failed, results });
   } catch (err) {
     console.error("Auto-batch error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Report: campaign performance for everyone tagged `ai-outreach-sent`.
+// Returns counts + a list of contacts by stage.
+app.post("/report", verifyWebhookSecret, async (req, res) => {
+  try {
+    const outreached = await searchContactsByTag("ai-outreach-sent");
+
+    const stats = {
+      total_texted: outreached.length,
+      hot_leads: 0,
+      opted_out: 0,
+      conversation_ended: 0,
+      replied: 0,
+      no_reply_yet: 0,
+    };
+
+    const buckets = { hot: [], opted_out: [], ended: [], replied: [], no_reply: [] };
+
+    // For each contact, fetch conversation to count inbound (their replies)
+    for (const c of outreached) {
+      const tags = (c.tags || []).map((t) => String(t).toLowerCase());
+      let convo, msgs = [];
+      try {
+        convo = await findConversationByContact(c.id);
+        if (convo?.id) msgs = await getMessages(convo.id);
+      } catch (e) {
+        // ignore, treat as no reply
+      }
+      const inbound = msgs.filter((m) => m.direction === "inbound");
+      const replied = inbound.length > 0;
+
+      const row = {
+        id: c.id,
+        name: `${c.firstName || ""} ${c.lastName || ""}`.trim() || c.contactName || "(no name)",
+        phone: c.phone,
+        replies: inbound.length,
+      };
+
+      if (tags.includes("hot-lead")) {
+        stats.hot_leads++;
+        buckets.hot.push(row);
+      }
+      if (tags.includes("opted-out")) {
+        stats.opted_out++;
+        buckets.opted_out.push(row);
+      }
+      if (tags.includes("conversation-ended") && !tags.includes("opted-out")) {
+        stats.conversation_ended++;
+        buckets.ended.push(row);
+      }
+      if (replied) {
+        stats.replied++;
+        if (!tags.includes("hot-lead")) buckets.replied.push(row);
+      } else {
+        stats.no_reply_yet++;
+        buckets.no_reply.push(row);
+      }
+    }
+
+    stats.reply_rate =
+      stats.total_texted > 0
+        ? Math.round((stats.replied / stats.total_texted) * 100) + "%"
+        : "0%";
+
+    res.json({
+      generated_at: new Date().toISOString(),
+      stats,
+      hot_leads: buckets.hot,
+      opted_out: buckets.opted_out,
+      conversation_ended: buckets.ended,
+      replied_still_active: buckets.replied,
+      no_reply_yet: buckets.no_reply,
+    });
+  } catch (err) {
+    console.error("Report error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

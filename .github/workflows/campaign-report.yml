@@ -1,0 +1,27 @@
+name: 3. Campaign Report
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch campaign report
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" \
+            --max-time 300 \
+            -X POST "$APP_URL/report?secret=$WEBHOOK_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{}")
+          echo "HTTP status: $HTTP_STATUS"
+          echo "-----"
+          cat response.json | python3 -m json.tool || cat response.json
+          echo "-----"
+          if [ "$HTTP_STATUS" -ge 400 ]; then
+            echo "::error::Report failed with status $HTTP_STATUS"
+            exit 1
+          fi

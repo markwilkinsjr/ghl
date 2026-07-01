@@ -80,6 +80,27 @@ async function sendEmail(contactId, subject, html) {
 
 // List contacts for the location. Paginates until `limit` is reached
 // or GHL runs out of results. Returns raw contact objects.
+// Find every contact matching a given tag. Uses the search endpoint.
+async function searchContactsByTag(tag) {
+  const locationId = process.env.GHL_LOCATION_ID;
+  const collected = [];
+  let page = 1;
+  while (true) {
+    const res = await client.post("/contacts/search", {
+      locationId,
+      page,
+      pageLimit: 100,
+      filters: [{ field: "tags", operator: "contains", value: tag }],
+    });
+    const contacts = res.data.contacts || [];
+    collected.push(...contacts);
+    if (contacts.length < 100) break;
+    page++;
+    if (page > 50) break; // safety
+  }
+  return collected;
+}
+
 async function listContacts({ limit = 200, pageLimit = 100 } = {}) {
   const locationId = process.env.GHL_LOCATION_ID;
   const collected = [];
@@ -225,6 +246,7 @@ module.exports = {
   sendEmail,
   addTag,
   listContacts,
+  searchContactsByTag,
   pickEligibleContacts,
   contactShouldBeSkipped,
   sendInitialOutreach,
