@@ -1,2 +1,4 @@
 node_modules/
 .env
+exclusion_list.csv
+*.local.csv
