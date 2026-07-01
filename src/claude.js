@@ -103,7 +103,7 @@ This is a private signal for the team — the user will not see it (we strip it 
 
 // Detect explicit STOP words in the incoming user message
 function isOptOut(text = "") {
-  const t = text.trim().toLowerCase();
+  const t = String(text || "").trim().toLowerCase();
   return /^(stop|stopall|end|quit|cancel|unsubscribe|delete|remove me)\b/.test(t);
 }
 

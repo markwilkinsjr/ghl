@@ -34,8 +34,16 @@ app.post("/webhook/inbound", async (req, res) => {
     const contactId =
       payload.contactId || payload.contact_id || payload.contact?.id || payload.id;
     let conversationId = payload.conversationId || payload.conversation_id;
-    let incomingText =
-      payload.body || payload.message || payload.messageBody || payload.text || "";
+    // GHL webhook nests the message body under `message.body`. Fall back to
+    // top-level fields for other webhook shapes. Coerce to string so
+    // downstream `.trim()` etc. never crash.
+    let incomingText = String(
+      payload.message?.body ||
+      payload.messageBody ||
+      payload.body ||
+      payload.text ||
+      ""
+    );
 
     if (!contactId) {
       return res.status(400).json({ error: "Missing contactId" });
