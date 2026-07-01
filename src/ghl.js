@@ -18,9 +18,22 @@ const EXCLUDE_TAGS = [
   "student",
   "member",
   "discord-subscriber",
+  "course-buyer",
   "opted-out",
   "do-not-contact",
 ];
+
+// Emails that must never be contacted, loaded from env var EXCLUSION_EMAILS
+// (comma or newline separated). Normalized to lowercase for matching.
+const EXCLUSION_EMAILS = new Set(
+  (process.env.EXCLUSION_EMAILS || "")
+    .split(/[\s,]+/)
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+);
+if (EXCLUSION_EMAILS.size) {
+  console.log(`Loaded ${EXCLUSION_EMAILS.size} exclusion emails from env`);
+}
 
 async function getContact(contactId) {
   const res = await client.get(`/contacts/${contactId}`);
@@ -71,18 +84,27 @@ async function addTag(contactId, tags) {
   return res.data;
 }
 
-// Returns true if the contact has any tag we should not text
+// Returns { skip: bool, reason: string } — true if the contact should NOT be texted.
+// Checks (1) their email against the hard-coded exclusion list and
+// (2) their GHL tags against EXCLUDE_TAGS.
 function contactShouldBeSkipped(contact) {
+  const email = String(contact?.email || "").trim().toLowerCase();
+  if (email && EXCLUSION_EMAILS.has(email)) {
+    return { skip: true, reason: `email on exclusion list (${email})` };
+  }
   const tags = (contact?.tags || []).map((t) => String(t).toLowerCase());
-  return EXCLUDE_TAGS.some((exclude) => tags.includes(exclude));
+  const hit = EXCLUDE_TAGS.find((t) => tags.includes(t));
+  if (hit) return { skip: true, reason: `has exclusion tag: ${hit}` };
+  return { skip: false };
 }
 
 // Initial outreach — Emy's Academy opener per bot reference doc
 async function sendInitialOutreach(contactId) {
   const contact = await getContact(contactId);
 
-  if (contactShouldBeSkipped(contact)) {
-    return { skipped: true, reason: "contact has exclusion tag" };
+  const check = contactShouldBeSkipped(contact);
+  if (check.skip) {
+    return { skipped: true, reason: check.reason };
   }
 
   const firstName = contact.firstName || "there";

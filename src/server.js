@@ -43,9 +43,10 @@ app.post("/webhook/inbound", async (req, res) => {
     // Fetch contact to check exclusion tags + conversation state
     const contact = await getContact(contactId);
 
-    if (contactShouldBeSkipped(contact)) {
-      console.log(`Skipping contact ${contactId} — exclusion tag`);
-      return res.json({ skipped: "contact has exclusion tag" });
+    const skip = contactShouldBeSkipped(contact);
+    if (skip.skip) {
+      console.log(`Skipping contact ${contactId} — ${skip.reason}`);
+      return res.json({ skipped: skip.reason });
     }
 
     // If Jordan already said goodbye, stop responding
