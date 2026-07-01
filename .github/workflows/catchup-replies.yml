@@ -1,0 +1,42 @@
+name: 5. Catch Up Missed Replies (heals dropped conversations)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type CATCHUP to confirm — Jordan will reply to every lead whose last message went unanswered"
+        required: true
+        default: ""
+        type: string
+
+jobs:
+  catchup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm intent
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "CATCHUP" ]; then
+            echo "::error::You must type CATCHUP to run this."
+            exit 1
+          fi
+
+      - name: Run catch-up
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" \
+            --max-time 600 \
+            -X POST "$APP_URL/catchup?secret=$WEBHOOK_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{}")
+          echo "HTTP status: $HTTP_STATUS"
+          echo "-----"
+          cat response.json | python3 -m json.tool || cat response.json
+          echo "-----"
+          if [ "$HTTP_STATUS" -ge 400 ]; then
+            echo "::error::Catchup failed"
+            exit 1
+          fi

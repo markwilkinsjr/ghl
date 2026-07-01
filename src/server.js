@@ -349,6 +349,110 @@ app.post("/report/conversations", verifyWebhookSecret, async (req, res) => {
   }
 });
 
+// Catch-up: for every contact tagged `ai-outreach-sent`, look at their conversation.
+// If the LAST message is from the lead (Jordan never replied), respond now.
+// This heals conversations that were dropped during a webhook bug window.
+app.post("/catchup", verifyWebhookSecret, async (req, res) => {
+  try {
+    const outreached = await searchContactsByTag("ai-outreach-sent");
+    const results = [];
+
+    for (const c of outreached) {
+      const tags = (c.tags || []).map((t) => String(t).toLowerCase());
+
+      // Already opted-out or conversation-ended — leave alone
+      if (tags.includes("opted-out") || tags.includes("conversation-ended")) {
+        results.push({ id: c.id, name: c.firstName, action: "skipped (already ended)" });
+        continue;
+      }
+
+      const check = contactShouldBeSkipped(c);
+      if (check.skip) {
+        results.push({ id: c.id, name: c.firstName, action: `skipped (${check.reason})` });
+        continue;
+      }
+
+      let msgs = [];
+      let conversationId;
+      try {
+        const convo = await findConversationByContact(c.id);
+        conversationId = convo?.id;
+        if (conversationId) msgs = await getMessages(conversationId);
+      } catch (e) {
+        results.push({ id: c.id, error: e.message });
+        continue;
+      }
+
+      if (msgs.length === 0) {
+        results.push({ id: c.id, name: c.firstName, action: "no messages" });
+        continue;
+      }
+
+      // GHL returns newest first — msgs[0] is the LAST message
+      const last = msgs[0];
+      if (last.direction !== "inbound") {
+        results.push({ id: c.id, name: c.firstName, action: "already handled (last msg is Jordan's)" });
+        continue;
+      }
+
+      const incomingText = String(last.body || last.text || "").trim();
+      if (!incomingText) {
+        results.push({ id: c.id, name: c.firstName, action: "empty last message" });
+        continue;
+      }
+
+      // Handle STOP retroactively
+      if (isOptOut(incomingText)) {
+        await addTag(c.id, ["opted-out", "conversation-ended"]);
+        results.push({ id: c.id, name: c.firstName, action: `opted-out (said "${incomingText}")` });
+        continue;
+      }
+
+      // Have Jordan reply
+      const history = [...msgs].reverse();
+      try {
+        const { text, isGoodbye, isHot } = await generateReply(history, incomingText);
+        if (isGoodbye) {
+          await addTag(c.id, ["conversation-ended"]);
+          results.push({ id: c.id, name: c.firstName, action: "conversation ended (goodbye)" });
+          continue;
+        }
+        if (isHot) {
+          await addTag(c.id, ["hot-lead", "needs-human-followup"]);
+        }
+        await sendSMS(c.id, text);
+        results.push({
+          id: c.id,
+          name: c.firstName,
+          action: "replied",
+          hot: isHot || false,
+          reply_preview: text.slice(0, 100),
+        });
+      } catch (e) {
+        results.push({ id: c.id, name: c.firstName, error: e.message });
+      }
+
+      // Small pause between sends
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+
+    const replied = results.filter((r) => r.action === "replied").length;
+    const optedOut = results.filter((r) => String(r.action).startsWith("opted-out")).length;
+    const hot = results.filter((r) => r.hot).length;
+
+    res.json({
+      total_checked: outreached.length,
+      replied,
+      opted_out_retroactively: optedOut,
+      new_hot_leads: hot,
+      results,
+    });
+  } catch (err) {
+    console.error("Catchup error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
