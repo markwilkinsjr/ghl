@@ -104,18 +104,61 @@ async function listContacts({ limit = 200, pageLimit = 100 } = {}) {
   return collected.slice(0, limit);
 }
 
+// IDs of contacts to always include in test batches (env-driven).
+const ALWAYS_INCLUDE_IDS = (process.env.ALWAYS_INCLUDE_IDS || "")
+  .split(/[\s,]+/)
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// A phone is textable if it's a US or Canada number (+1) or has no country code.
+function isUsOrCaPhone(phone) {
+  const p = String(phone || "").replace(/[^\d+]/g, "");
+  if (!p) return false;
+  if (p.startsWith("+1")) return true;
+  if (p.startsWith("1") && p.length === 11) return true;
+  if (p.length === 10) return true; // no country code, treat as US
+  return false;
+}
+
 // Pick N contacts that are eligible for outreach (skip exclusion list,
-// skip already-messaged, skip contacts without a mobile phone).
+// skip already-messaged, skip contacts without a mobile US/CA phone).
 async function pickEligibleContacts(count = 25) {
   const pool = await listContacts({ limit: Math.max(count * 5, 200) });
   const eligible = [];
   const skipped = [];
+  const seen = new Set();
+
+  // Prepend always-include contacts (still respect exclusion list)
+  for (const id of ALWAYS_INCLUDE_IDS) {
+    if (eligible.length >= count) break;
+    try {
+      const c = await getContact(id);
+      const check = contactShouldBeSkipped(c);
+      if (check.skip) {
+        skipped.push({ id, reason: `always-include but ${check.reason}` });
+        continue;
+      }
+      if (!c.phone) {
+        skipped.push({ id, reason: "always-include but no phone" });
+        continue;
+      }
+      eligible.push(c);
+      seen.add(id);
+    } catch (e) {
+      skipped.push({ id, reason: `always-include lookup failed: ${e.message}` });
+    }
+  }
 
   for (const c of pool) {
     if (eligible.length >= count) break;
+    if (seen.has(c.id)) continue;
 
     if (!c.phone) {
       skipped.push({ id: c.id, reason: "no phone" });
+      continue;
+    }
+    if (!isUsOrCaPhone(c.phone)) {
+      skipped.push({ id: c.id, reason: `non-US/CA number (${c.phone})` });
       continue;
     }
     const tags = (c.tags || []).map((t) => String(t).toLowerCase());
