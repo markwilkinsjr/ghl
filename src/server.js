@@ -8,6 +8,7 @@ const {
   addTag,
   contactShouldBeSkipped,
   sendInitialOutreach,
+  pickEligibleContacts,
 } = require("./ghl");
 const { generateReply, isOptOut } = require("./claude");
 
@@ -148,6 +149,63 @@ app.post("/outreach/batch", verifyWebhookSecret, async (req, res) => {
     res.json({ total: contactIds.length, sent, skipped, failed, results });
   } catch (err) {
     console.error("Error in batch outreach:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Auto-batch preview — dry run: shows which contacts WOULD receive outreach.
+// Sends no texts. Safe to run any time.
+app.post("/outreach/auto-batch/preview", verifyWebhookSecret, async (req, res) => {
+  try {
+    const count = Number(req.body?.count) || 25;
+    const { eligible, skipped, pool_size } = await pickEligibleContacts(count);
+    res.json({
+      pool_size,
+      would_send: eligible.length,
+      would_skip: skipped.length,
+      picks: eligible.map((c) => ({
+        id: c.id,
+        name: `${c.firstName || ""} ${c.lastName || ""}`.trim() || c.contactName,
+        email: c.email,
+        phone: c.phone,
+      })),
+      skipped_sample: skipped.slice(0, 10),
+    });
+  } catch (err) {
+    console.error("Preview error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Auto-batch run — picks N eligible contacts and sends outreach with pacing.
+app.post("/outreach/auto-batch/run", verifyWebhookSecret, async (req, res) => {
+  try {
+    const count = Number(req.body?.count) || 25;
+    const delayMs = Number(req.body?.delayMs) || 3000;
+
+    const { eligible } = await pickEligibleContacts(count);
+    if (eligible.length === 0) {
+      return res.json({ sent: 0, message: "No eligible contacts found." });
+    }
+
+    const results = [];
+    for (const c of eligible) {
+      try {
+        const r = await sendInitialOutreach(c.id);
+        results.push({ id: c.id, name: c.firstName, phone: c.phone, ...r });
+      } catch (e) {
+        results.push({ id: c.id, error: e.message });
+      }
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+
+    const sent = results.filter((r) => r.success).length;
+    const skipped = results.filter((r) => r.skipped).length;
+    const failed = results.filter((r) => r.error).length;
+
+    res.json({ requested: count, sent, skipped, failed, results });
+  } catch (err) {
+    console.error("Auto-batch error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -1,0 +1,50 @@
+name: 2. Send Test Batch (SENDS REAL TEXTS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "How many contacts to text (start with 25!)"
+        required: true
+        default: "25"
+        type: string
+      confirm:
+        description: "Type SEND to confirm real texts will go out"
+        required: true
+        default: ""
+        type: string
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm intent
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "SEND" ]; then
+            echo "::error::You must type SEND in the confirm box to actually send texts."
+            exit 1
+          fi
+
+      - name: Send outreach to eligible contacts
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          COUNT: ${{ inputs.count }}
+        run: |
+          echo "Sending outreach to up to ${COUNT} eligible contacts…"
+          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" \
+            --max-time 600 \
+            -X POST "$APP_URL/outreach/auto-batch/run?secret=$WEBHOOK_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{\"count\": ${COUNT}}")
+          echo "HTTP status: $HTTP_STATUS"
+          echo "-----"
+          cat response.json | python3 -m json.tool || cat response.json
+          echo "-----"
+          if [ "$HTTP_STATUS" -ge 400 ]; then
+            echo "::error::Batch send failed with status $HTTP_STATUS"
+            exit 1
+          fi
+          echo "::notice::Batch complete — check the Response above for sent/skipped counts."

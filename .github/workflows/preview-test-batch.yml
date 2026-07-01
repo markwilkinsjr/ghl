@@ -1,0 +1,34 @@
+name: 1. Preview Test Batch (safe, no texts sent)
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "How many contacts to preview"
+        required: true
+        default: "25"
+        type: string
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preview which contacts would be texted
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          COUNT: ${{ inputs.count }}
+        run: |
+          echo "Previewing ${COUNT} contacts…"
+          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" \
+            -X POST "$APP_URL/outreach/auto-batch/preview?secret=$WEBHOOK_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{\"count\": ${COUNT}}")
+          echo "HTTP status: $HTTP_STATUS"
+          echo "-----"
+          cat response.json | python3 -m json.tool || cat response.json
+          echo "-----"
+          if [ "$HTTP_STATUS" -ge 400 ]; then
+            echo "::error::Preview failed with status $HTTP_STATUS"
+            exit 1
+          fi

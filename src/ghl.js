@@ -78,6 +78,62 @@ async function sendEmail(contactId, subject, html) {
   return res.data;
 }
 
+// List contacts for the location. Paginates until `limit` is reached
+// or GHL runs out of results. Returns raw contact objects.
+async function listContacts({ limit = 200, pageLimit = 100 } = {}) {
+  const locationId = process.env.GHL_LOCATION_ID;
+  const collected = [];
+  let startAfter, startAfterId;
+
+  while (collected.length < limit) {
+    const params = { locationId, limit: pageLimit };
+    if (startAfter) params.startAfter = startAfter;
+    if (startAfterId) params.startAfterId = startAfterId;
+
+    const res = await client.get("/contacts/", { params });
+    const contacts = res.data.contacts || [];
+    if (contacts.length === 0) break;
+
+    collected.push(...contacts);
+    const last = contacts[contacts.length - 1];
+    startAfter = last?.dateAdded ? new Date(last.dateAdded).getTime() : undefined;
+    startAfterId = last?.id;
+    if (contacts.length < pageLimit) break;
+  }
+
+  return collected.slice(0, limit);
+}
+
+// Pick N contacts that are eligible for outreach (skip exclusion list,
+// skip already-messaged, skip contacts without a mobile phone).
+async function pickEligibleContacts(count = 25) {
+  const pool = await listContacts({ limit: Math.max(count * 5, 200) });
+  const eligible = [];
+  const skipped = [];
+
+  for (const c of pool) {
+    if (eligible.length >= count) break;
+
+    if (!c.phone) {
+      skipped.push({ id: c.id, reason: "no phone" });
+      continue;
+    }
+    const tags = (c.tags || []).map((t) => String(t).toLowerCase());
+    if (tags.includes("ai-outreach-sent")) {
+      skipped.push({ id: c.id, reason: "already messaged" });
+      continue;
+    }
+    const check = contactShouldBeSkipped(c);
+    if (check.skip) {
+      skipped.push({ id: c.id, reason: check.reason });
+      continue;
+    }
+    eligible.push(c);
+  }
+
+  return { eligible, skipped, pool_size: pool.length };
+}
+
 async function addTag(contactId, tags) {
   const list = Array.isArray(tags) ? tags : [tags];
   const res = await client.post(`/contacts/${contactId}/tags`, { tags: list });
@@ -125,6 +181,8 @@ module.exports = {
   sendSMS,
   sendEmail,
   addTag,
+  listContacts,
+  pickEligibleContacts,
   contactShouldBeSkipped,
   sendInitialOutreach,
   EXCLUDE_TAGS,
