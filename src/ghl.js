@@ -11,6 +11,17 @@ const client = axios.create({
   },
 });
 
+// Tags that mean "do NOT text this person again"
+const EXCLUDE_TAGS = [
+  "already-purchased",
+  "customer",
+  "student",
+  "member",
+  "discord-subscriber",
+  "opted-out",
+  "do-not-contact",
+];
+
 async function getContact(contactId) {
   const res = await client.get(`/contacts/${contactId}`);
   return res.data.contact;
@@ -23,12 +34,9 @@ async function getConversation(conversationId) {
 
 async function getMessages(conversationId) {
   const res = await client.get(`/conversations/${conversationId}/messages`);
-  // GHL nests messages under data.messages.messages on this endpoint
   return res.data.messages?.messages || res.data.messages || [];
 }
 
-// Find the most recent conversation for a contact (needed because GHL workflow
-// webhooks don't always include a conversationId)
 async function findConversationByContact(contactId) {
   const locationId = process.env.GHL_LOCATION_ID;
   const res = await client.get("/conversations/search", {
@@ -57,28 +65,34 @@ async function sendEmail(contactId, subject, html) {
   return res.data;
 }
 
-// Trigger the initial outreach for a contact who expressed interest but didn't buy
+async function addTag(contactId, tags) {
+  const list = Array.isArray(tags) ? tags : [tags];
+  const res = await client.post(`/contacts/${contactId}/tags`, { tags: list });
+  return res.data;
+}
+
+// Returns true if the contact has any tag we should not text
+function contactShouldBeSkipped(contact) {
+  const tags = (contact?.tags || []).map((t) => String(t).toLowerCase());
+  return EXCLUDE_TAGS.some((exclude) => tags.includes(exclude));
+}
+
+// Initial outreach — Emy's Academy opener per bot reference doc
 async function sendInitialOutreach(contactId) {
   const contact = await getContact(contactId);
+
+  if (contactShouldBeSkipped(contact)) {
+    return { skipped: true, reason: "contact has exclusion tag" };
+  }
+
   const firstName = contact.firstName || "there";
-
-  const freebie = process.env.FREEBIE_NAME;
-  const freebieLink = process.env.FREEBIE_LINK;
-  const courseName = process.env.COURSE_NAME || "our course";
-
-  // Include the freebie line only if both name and link are configured
-  const freebieLine =
-    freebie && freebieLink
-      ? `No worries at all — I'd love to send you ${freebie} completely free: ${freebieLink}\n\n`
-      : `No worries at all — I'd still love to help you out.\n\n`;
-
   const message =
-    `Hey ${firstName}! I noticed you checked out ${courseName} but didn't grab a spot. ` +
-    freebieLine +
-    `Quick question though — what held you back? Was it timing, price, or something else? ` +
-    `I want to make sure I can help you out. 😊`;
+    `Hey, is this ${firstName}? This is Jordan with Emy's Academy — ` +
+    `you did a call with Emy about the program, right?`;
 
-  return await sendSMS(contactId, message);
+  await sendSMS(contactId, message);
+  await addTag(contactId, ["ai-outreach-sent"]);
+  return { success: true, message };
 }
 
 module.exports = {
@@ -88,5 +102,8 @@ module.exports = {
   findConversationByContact,
   sendSMS,
   sendEmail,
+  addTag,
+  contactShouldBeSkipped,
   sendInitialOutreach,
+  EXCLUDE_TAGS,
 };

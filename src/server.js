@@ -5,14 +5,15 @@ const {
   getMessages,
   findConversationByContact,
   sendSMS,
+  addTag,
+  contactShouldBeSkipped,
   sendInitialOutreach,
 } = require("./ghl");
-const { generateReply } = require("./claude");
+const { generateReply, isOptOut } = require("./claude");
 
 const app = express();
 app.use(express.json());
 
-// Optional: verify GHL webhook secret
 function verifyWebhookSecret(req, res, next) {
   const secret = req.headers["x-ghl-signature"] || req.query.secret;
   if (process.env.WEBHOOK_SECRET && secret !== process.env.WEBHOOK_SECRET) {
@@ -21,7 +22,6 @@ function verifyWebhookSecret(req, res, next) {
   next();
 }
 
-// Health check
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 // Inbound message webhook — fired by GHL when a contact replies
@@ -30,37 +30,42 @@ app.post("/webhook/inbound", async (req, res) => {
     const payload = req.body || {};
     console.log("Inbound webhook received:", JSON.stringify(payload, null, 2));
 
-    // GHL workflow webhooks vary in shape — pull fields from several possible names
     const contactId =
       payload.contactId || payload.contact_id || payload.contact?.id || payload.id;
-
     let conversationId = payload.conversationId || payload.conversation_id;
-
-    // The reply text may arrive under different keys (or not at all)
     let incomingText =
       payload.body || payload.message || payload.messageBody || payload.text || "";
 
     if (!contactId) {
-      console.warn("No contactId found in payload");
       return res.status(400).json({ error: "Missing contactId" });
     }
 
-    // If we don't have a conversation, look it up by contact
+    // Fetch contact to check exclusion tags + conversation state
+    const contact = await getContact(contactId);
+
+    if (contactShouldBeSkipped(contact)) {
+      console.log(`Skipping contact ${contactId} — exclusion tag`);
+      return res.json({ skipped: "contact has exclusion tag" });
+    }
+
+    // If Jordan already said goodbye, stop responding
+    const tags = (contact.tags || []).map((t) => String(t).toLowerCase());
+    if (tags.includes("conversation-ended")) {
+      console.log(`Skipping contact ${contactId} — conversation already ended`);
+      return res.json({ skipped: "conversation ended" });
+    }
+
     if (!conversationId) {
       const convo = await findConversationByContact(contactId);
       conversationId = convo?.id;
     }
 
-    // Fetch conversation history so Claude has context
     let history = [];
     if (conversationId) {
       const messages = await getMessages(conversationId);
-      // GHL returns newest first — reverse so it's chronological
       history = [...messages].reverse();
     }
 
-    // If the webhook didn't include the message text, use the latest inbound
-    // message from the fetched history
     if (!incomingText && history.length) {
       const lastInbound = [...history]
         .reverse()
@@ -69,36 +74,79 @@ app.post("/webhook/inbound", async (req, res) => {
     }
 
     if (!incomingText) {
-      console.warn("No incoming message text found");
       return res.json({ skipped: "no message text to respond to" });
     }
 
-    // Generate Claude's reply
-    const reply = await generateReply(history, incomingText);
+    // Hard STOP handling — TCPA compliance
+    if (isOptOut(incomingText)) {
+      await addTag(contactId, ["opted-out", "conversation-ended"]);
+      console.log(`Contact ${contactId} opted out — stopping`);
+      return res.json({ success: true, action: "opted-out" });
+    }
 
-    // Send back via SMS
-    await sendSMS(contactId, reply);
+    // Ask Claude for a reply
+    const { text, isGoodbye, isHot } = await generateReply(history, incomingText);
 
-    console.log(`Replied to contact ${contactId}: ${reply}`);
-    res.json({ success: true, reply });
+    if (isGoodbye) {
+      await addTag(contactId, ["conversation-ended"]);
+      console.log(`Claude returned goodbye — ending conversation with ${contactId}`);
+      return res.json({ success: true, action: "conversation-ended" });
+    }
+
+    if (isHot) {
+      await addTag(contactId, ["hot-lead", "needs-human-followup"]);
+      console.log(`🔥 HOT LEAD detected: ${contactId}`);
+    }
+
+    await sendSMS(contactId, text);
+
+    console.log(`Replied to ${contactId}: ${text}`);
+    res.json({ success: true, reply: text, hot: isHot });
   } catch (err) {
     console.error("Error handling inbound webhook:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Manual trigger endpoint — call this to start the outreach for a specific contact
-// POST /outreach { "contactId": "abc123" }
+// Manual outreach trigger — respects the exclusion list
 app.post("/outreach", verifyWebhookSecret, async (req, res) => {
   try {
     const { contactId } = req.body;
     if (!contactId) return res.status(400).json({ error: "contactId required" });
-
     const result = await sendInitialOutreach(contactId);
-    console.log(`Initial outreach sent to ${contactId}`);
-    res.json({ success: true, result });
+    res.json(result);
   } catch (err) {
     console.error("Error sending outreach:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch endpoint — send outreach to many contacts at once (with pacing)
+app.post("/outreach/batch", verifyWebhookSecret, async (req, res) => {
+  try {
+    const { contactIds = [], delayMs = 3000 } = req.body;
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({ error: "contactIds array required" });
+    }
+
+    const results = [];
+    for (const contactId of contactIds) {
+      try {
+        const r = await sendInitialOutreach(contactId);
+        results.push({ contactId, ...r });
+      } catch (e) {
+        results.push({ contactId, error: e.message });
+      }
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+
+    const sent = results.filter((r) => r.success).length;
+    const skipped = results.filter((r) => r.skipped).length;
+    const failed = results.filter((r) => r.error).length;
+
+    res.json({ total: contactIds.length, sent, skipped, failed, results });
+  } catch (err) {
+    console.error("Error in batch outreach:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -106,6 +154,4 @@ app.post("/outreach", verifyWebhookSecret, async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`Inbound webhook: POST http://localhost:${PORT}/webhook/inbound`);
-  console.log(`Manual outreach: POST http://localhost:${PORT}/outreach`);
 });
