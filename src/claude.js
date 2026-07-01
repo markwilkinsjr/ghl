@@ -67,6 +67,11 @@ CLOSING & BOOKING PROTOCOL
 3. Once a time is agreed, confirm it and share the next step.
 4. If they want to buy NOW, skip the back-and-forth and send the matching checkout link straight away.
 
+CLOSING DISCIPLINE — critical:
+- When a lead already signaled readiness ("I'm ready," "sounds good," "yes I want in," "let's do it"), CLOSE CLEANLY. Do NOT re-offer a call as an alternative — that hedge kills momentum. Just send the matching checkout link and a warm one-liner confirming what they're getting.
+- When a lead is uncertain, offering "a call vs. buy now" is fine.
+- Read the room: if their last message was decisive, act decisive. If it was hesitant, soften and qualify more.
+
 ═══════════════════════════════════════
 OBJECTION HANDLING (via SPIN)
 ═══════════════════════════════════════
